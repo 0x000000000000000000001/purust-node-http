@@ -23,12 +23,15 @@ pub fn Node_HTTP_IncomingMessage_completeImpl() -> crate::UnknownType {
     })))
 }
 
-pub fn Node_HTTP_IncomingMessage_headersImpl(message: Rc<IncomingMessage>) -> crate::UnknownType {
-    let headers = incoming_state(&message).lock().unwrap().headers.clone();
-    crate::Value::Class(Rc::new(headers))
+pub fn Node_HTTP_IncomingMessage_headersImpl(
+    message: Rc<IncomingMessage>,
+) -> Rc<Purs_Foreign_Object::Object> {
+    incoming_state(&message).lock().unwrap().headers.clone()
 }
 
-pub fn Node_HTTP_IncomingMessage_headersDistinct(message: Rc<IncomingMessage>) -> crate::UnknownType {
+pub fn Node_HTTP_IncomingMessage_headersDistinct(
+    message: Rc<IncomingMessage>,
+) -> Rc<Purs_Foreign_Object::Object> {
     let values = {
         let state = incoming_state(&message);
         let state = state.lock().unwrap();
@@ -45,7 +48,7 @@ pub fn Node_HTTP_IncomingMessage_headersDistinct(message: Rc<IncomingMessage>) -
             })
             .collect()
     };
-    crate::Value::Class(Rc::new(purust_core::SharedRecord::from_entries(values)))
+    Rc::new(Purs_Foreign_Object::Object::from_entries(values))
 }
 
 pub fn Node_HTTP_IncomingMessage_httpVersion(message: Rc<IncomingMessage>) -> String {

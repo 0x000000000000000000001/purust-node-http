@@ -46,10 +46,10 @@ complete im = runEffectFn1 completeImpl im
 foreign import completeImpl :: forall messageType. EffectFn1 (IncomingMessage messageType) (Boolean)
 
 headers :: forall messageType. IncomingMessage messageType -> Object String
-headers = Object.delete "set-cookie" <<< headersImpl
+headers message = Object.delete "set-cookie" (headersImpl message)
 
 cookies :: forall messageType. IncomingMessage messageType -> Maybe (Array String)
-cookies = Object.lookup "set-cookie" <<< headersImpl
+cookies message = Object.lookup "set-cookie" (headersImpl message)
 
 foreign import headersImpl :: forall messageType a. IncomingMessage messageType -> Object a
 

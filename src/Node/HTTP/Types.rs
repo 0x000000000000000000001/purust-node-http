@@ -173,7 +173,9 @@ pub fn register_native_listener(
         callback(argument);
         crate::Value::Unit
     })));
-    Purs_Node_EventEmitter::purust_emitter_once_native(emitter, event, value);
+    // HTTP consumes whole streams: a one-shot listener would drop every
+    // chunk after the first (multi-segment requests, later connections).
+    Purs_Node_EventEmitter::purust_emitter_on_native(emitter, event, value);
 }
 
 // ---------------------------------------------------------------------------
@@ -557,6 +559,11 @@ pub fn client_request_new(plan: RequestPlan) -> Rc<ClientRequest> {
     register_native_listener(&socket, "data", move |chunk| {
         client_ingest(&request_for_data, &bytes_of(&chunk));
     });
+    // The response may have arrived before this listener was attached.
+    let buffered = Purs_Node_Stream::purust_stream_take(&socket);
+    if !buffered.is_empty() {
+        client_ingest(&request, &buffered);
+    }
     let request_for_end = request.clone();
     register_native_listener(&socket, "end", move |_| {
         if let Some(response) = client_response(&request_for_end) {
@@ -726,6 +733,11 @@ fn server_connection(server: Rc<HttpServer>, socket: Rc<Socket>) {
     register_native_listener(&socket, "data", move |chunk| {
         server_ingest(server_for_data.clone(), socket_for_data.clone(), &bytes_of(&chunk));
     });
+    // The client may have sent its request before this listener was attached.
+    let buffered = Purs_Node_Stream::purust_stream_take(&socket);
+    if !buffered.is_empty() {
+        server_ingest(server, socket, &buffered);
+    }
 }
 
 fn connection_state(socket: &Rc<Socket>) -> Arc<Mutex<ConnectionState>> {
