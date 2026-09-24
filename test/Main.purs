@@ -4,7 +4,7 @@ import Prelude
 
 import Data.Either (Either(..))
 import Data.Foldable (foldMap, for_)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (Maybe(..), fromMaybe)
 import Effect (Effect)
 import Effect.Aff (launchAff_, makeAff, nonCanceler)
 import Effect.Class (liftEffect)
@@ -29,6 +29,7 @@ import Node.Net.Socket as Socket
 import Node.Stream (Writable, end, pipe)
 import Node.Stream as Stream
 import Partial.Unsafe (unsafeCrashWith)
+import Test.Assert (assertEqual)
 import Unsafe.Coerce (unsafeCoerce)
 
 foreign import setTimeoutImpl :: EffectFn2 Int (Effect Unit) Unit
@@ -39,12 +40,9 @@ main :: Effect Unit
 main = do
   testBasic
   testUpgrade
-  -- TLS and public-network checks are not reproducible in the native backend:
-  -- they depend on `tls` and on reachable hosts (pursuit.purescript.org,
-  -- httpbin.org). Kept out of the default run; see the port notes.
-  -- testHttpsServer
-  -- testHttps
-  -- testCookies
+  testCookies
+  testHttpsServer
+  testHttps
 
 killServer :: forall transmissionType. HttpServer' transmissionType -> Effect Unit
 killServer s = do
@@ -156,10 +154,17 @@ testHttpsServer = do
     { key: [ mockKey' ]
     , cert: [ mockCert' ]
     }
-  server # once_ Server.requestH (respond (killServer server))
+  server # once_ Server.requestH \_ res -> do
+    ServerResponse.setStatusCode 200 res
+    let
+      om = ServerResponse.toOutgoingMessage res
+      outputStream = OM.toWriteable om
+    OM.setHeader "Content-Type" "text/plain" om
+    void $ Stream.writeString outputStream UTF8 "secure-hello"
+    Stream.end outputStream
   let netServer = Server.toNetServer server
   netServer # once_ NetServer.listeningH do
-    log "Listening on port 8081."
+    log "Secure server listening on port 8081."
     let
       optsR =
         { protocol: "https:"
@@ -171,25 +176,64 @@ testHttpsServer = do
         }
     log $ optsR.method <> " " <> optsR.protocol <> "//" <> optsR.hostname <> ":" <> show optsR.port <> optsR.path <> ":"
     req <- HTTPS.requestOpts optsR
-    req # once_ Client.responseH logResponse
+    req # once_ Client.responseH \response -> do
+      assertEqual { expected: 200, actual: IM.statusCode response }
+      log "testHttpsServer - secure response received."
+      logResponse response
+      killServer server
     end (OM.toWriteable $ Client.toOutgoingMessage req)
   listenTcp netServer { host: "localhost", port: 8081 }
 
 testHttps :: Effect Unit
 testHttps = do
-  let uri = "https://pursuit.purescript.org/packages/purescript-node-http/badge"
-  log ("GET " <> uri <> ":")
-  req <- HTTPS.get uri
-  req # once_ Client.responseH logResponse
-  end (OM.toWriteable $ Client.toOutgoingMessage req)
+  mockKey' <- Buffer.fromString mockKey UTF8
+  mockCert' <- Buffer.fromString mockCert UTF8
+  server <- HTTPS.createSecureServer'
+    { key: [ mockKey' ]
+    , cert: [ mockCert' ]
+    }
+  server # once_ Server.requestH \req res -> do
+    ServerResponse.setStatusCode 200 res
+    let
+      om = ServerResponse.toOutgoingMessage res
+      outputStream = OM.toWriteable om
+    OM.setHeader "Content-Type" "text/plain" om
+    void $ Stream.writeString outputStream UTF8 ("secure:" <> IM.url req)
+    Stream.end outputStream
+  let netServer = Server.toNetServer server
+  netServer # once_ NetServer.listeningH do
+    log "Secure server listening on port 8083."
+    let uri = "https://localhost:8083/badge"
+    log ("GET " <> uri <> ":")
+    req <- HTTPS.request' uri { rejectUnauthorized: false }
+    req # once_ Client.responseH \response -> do
+      assertEqual { expected: 200, actual: IM.statusCode response }
+      log "testHttps - secure URL request received."
+      logResponse response
+      killServer server
+    end (OM.toWriteable $ Client.toOutgoingMessage req)
+  listenTcp netServer { host: "localhost", port: 8083 }
 
 testCookies :: Effect Unit
 testCookies = do
-  let uri = "https://httpbin.org/cookies/set?cookie1=firstcookie&cookie2=secondcookie"
-  log ("GET " <> uri <> ":")
-  req <- HTTPS.get uri
-  req # once_ Client.responseH logResponse
-  end (OM.toWriteable $ Client.toOutgoingMessage req)
+  server <- HTTP.createServer
+  server # once_ Server.requestH \_ res -> do
+    ServerResponse.setStatusCode 200 res
+    let om = ServerResponse.toOutgoingMessage res
+        outputStream = OM.toWriteable om
+    OM.setHeader "Set-Cookie" "cookie1=firstcookie" om
+    void $ Stream.writeString outputStream UTF8 "ok"
+    Stream.end outputStream
+  let netServer = Server.toNetServer server
+  netServer # once_ NetServer.listeningH do
+    log "Cookies server listening on port 8082."
+    req <- HTTP.get "http://localhost:8082/"
+    req # once_ Client.responseH \response -> do
+      assertEqual { expected: Just [ "cookie1=firstcookie" ], actual: IM.cookies response }
+      log "testCookies - cookie parsed."
+      killServer server
+    end (OM.toWriteable $ Client.toOutgoingMessage req)
+  listenTcp netServer { host: "localhost", port: 8082 }
 
 logResponse :: forall imTy. IncomingMessage imTy -> Effect Unit
 logResponse response = void do

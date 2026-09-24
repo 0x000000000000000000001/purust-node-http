@@ -29,6 +29,27 @@ pub fn Node_HTTP_IncomingMessage_headersImpl(
     incoming_state(&message).lock().unwrap().headers.clone()
 }
 
+/// Node always reports `set-cookie` as an array, even for a single cookie.
+pub fn Node_HTTP_IncomingMessage_unsafeCookies(
+    message: Rc<IncomingMessage>,
+) -> Rc<Purs_Data_Nullable::Nullable> {
+    let values = {
+        let state = incoming_state(&message);
+        let state = state.lock().unwrap();
+        state
+            .headers
+            .get("set-cookie")
+            .map(|value| match value.resolve() {
+                crate::Value::Array(entries) => entries.to_vec(),
+                _ => vec![value.clone()],
+            })
+    };
+    match values {
+        Some(values) => Purs_Data_Nullable::Data_Nullable_notNull(crate::mk_array(values)),
+        None => Purs_Data_Nullable::Data_Nullable_null(),
+    }
+}
+
 pub fn Node_HTTP_IncomingMessage_headersDistinct(
     message: Rc<IncomingMessage>,
 ) -> Rc<Purs_Foreign_Object::Object> {

@@ -49,7 +49,10 @@ headers :: forall messageType. IncomingMessage messageType -> Object String
 headers message = Object.delete "set-cookie" (headersImpl message)
 
 cookies :: forall messageType. IncomingMessage messageType -> Maybe (Array String)
-cookies message = Object.lookup "set-cookie" (headersImpl message)
+cookies message = toMaybe (unsafeCookies message)
+
+-- | Node always reports `set-cookie` as an array, even for a single cookie.
+foreign import unsafeCookies :: forall messageType. IncomingMessage messageType -> Nullable (Array String)
 
 foreign import headersImpl :: forall messageType a. IncomingMessage messageType -> Object a
 

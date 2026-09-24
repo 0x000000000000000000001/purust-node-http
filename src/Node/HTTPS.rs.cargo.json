@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "dependencies": {
+    "native-tls": { "version": "=0.2.18" }
+  }
+}

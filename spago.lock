@@ -27,6 +27,7 @@
         "test": {
           "dependencies": [
             "aff",
+            "assert",
             "console",
             "effect",
             "either",

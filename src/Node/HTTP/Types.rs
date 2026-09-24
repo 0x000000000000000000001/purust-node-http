@@ -261,10 +261,14 @@ pub fn outgoing_new(
     Purs_Node_Stream::purust_stream_set_write_hook(
         stream,
         Arc::new(move |bytes| {
-            let (fd, ready) = {
+            let (fd, socket, ready) = {
                 let state = outgoing_state(&hooked);
                 let state = state.lock().unwrap();
-                (state.fd, state.fd.is_some())
+                (
+                    state.fd,
+                    state.socket.clone(),
+                    state.fd.is_some() || state.socket.is_some(),
+                )
             };
             if !ready {
                 let state = outgoing_state(&hooked);
@@ -272,7 +276,11 @@ pub fn outgoing_new(
                 return;
             }
             outgoing_flush_head(&hooked);
-            if let Some(fd) = fd {
+            if let Some(socket) = socket {
+                // Through the net layer, so a TLS connection encrypts.
+                let socket = socket.unwrap_class::<Rc<Socket>>().clone();
+                let _ = Purs_Node_Net_Types::socket_write(&socket, bytes);
+            } else if let Some(fd) = fd {
                 write_fd(fd, bytes);
             }
         }),
@@ -289,7 +297,7 @@ pub fn outgoing_state(stream: &Rc<OutgoingMessage>) -> Arc<Mutex<OutgoingState>>
 /// Sends the status/request line and headers, then the body buffered before
 /// the descriptor was ready.
 pub fn outgoing_flush_head(stream: &Rc<OutgoingMessage>) {
-    let (head, fd) = {
+    let (head, fd, socket) = {
         let state = outgoing_state(stream);
         let mut state = state.lock().unwrap();
         if state.headers_sent {
@@ -318,9 +326,20 @@ pub fn outgoing_flush_head(stream: &Rc<OutgoingMessage>) {
             ),
         };
         let pending = std::mem::take(&mut state.pending);
-        (format!("{head}\r\n{}", String::from_utf8_lossy(&pending)), fd)
+        (
+            format!("{head}\r\n{}", String::from_utf8_lossy(&pending)),
+            fd,
+            state.socket.clone(),
+        )
     };
-    write_fd(fd, head.as_bytes());
+    // Through the net layer, so a TLS connection encrypts the head too.
+    match socket {
+        Some(socket) => {
+            let socket = socket.unwrap_class::<Rc<Socket>>().clone();
+            let _ = Purs_Node_Net_Types::socket_write(&socket, head.as_bytes());
+        }
+        None => write_fd(fd, head.as_bytes()),
+    }
 }
 
 /// A minimal RFC 1123 date, used for the automatic `Date` header.
@@ -445,21 +464,25 @@ pub struct RequestPlan {
     pub method: String,
     pub headers: Vec<(String, String)>,
     pub queue: Option<crate::UnknownType>,
+    /// Set for `https:` requests: the socket handshakes before connecting.
+    pub tls: Option<Purs_Node_Net_Types::TlsClientOptions>,
 }
 
-fn parser_from_url(url: &str) -> Option<(String, u16, String)> {
-    let rest = url
-        .strip_prefix("http://")
-        .or_else(|| url.strip_prefix("https://"))?;
+fn parser_from_url(url: &str) -> Option<(String, u16, String, bool)> {
+    let (rest, secure) = match url.strip_prefix("https://") {
+        Some(rest) => (rest, true),
+        None => (url.strip_prefix("http://")?, false),
+    };
     let (authority, path) = match rest.find('/') {
         Some(index) => (&rest[..index], &rest[index..]),
         None => (rest, "/"),
     };
+    let default_port = if secure { 443 } else { 80 };
     let (host, port) = match authority.rsplit_once(':') {
-        Some((host, port)) => (host.to_owned(), port.parse().unwrap_or(80)),
-        None => (authority.to_owned(), 80),
+        Some((host, port)) => (host.to_owned(), port.parse().unwrap_or(default_port)),
+        None => (authority.to_owned(), default_port),
     };
-    Some((host, port, path.to_owned()))
+    Some((host, port, path.to_owned(), secure))
 }
 
 pub fn parse_request_options(options: &crate::UnknownType, url: Option<String>) -> RequestPlan {
@@ -470,8 +493,9 @@ pub fn parse_request_options(options: &crate::UnknownType, url: Option<String>) 
     let mut method = Purs_Node_Net_Types::option_string(options, "method")
         .unwrap_or_else(|| "GET".to_owned());
     let mut path = Purs_Node_Net_Types::option_string(options, "path").unwrap_or_else(|| "/".to_owned());
+    let mut secure = false;
     if let Some(url) = url {
-        if let Some((url_host, url_port, url_path)) = parser_from_url(&url) {
+        if let Some((url_host, url_port, url_path, url_secure)) = parser_from_url(&url) {
             if Purs_Node_Net_Types::option_string(options, "hostname").is_none()
                 && Purs_Node_Net_Types::option_string(options, "host").is_none()
             {
@@ -481,8 +505,24 @@ pub fn parse_request_options(options: &crate::UnknownType, url: Option<String>) 
                 port = url_port;
             }
             path = url_path;
+            secure = url_secure;
         }
     }
+    if Purs_Node_Net_Types::option_string(options, "protocol").as_deref() == Some("https:") {
+        secure = true;
+    }
+    let tls = if secure {
+        // Node defaults `rejectUnauthorized` to true; `false` accepts any
+        // certificate, which the tests use with their self-signed fixture.
+        let accept_invalid_certs =
+            Purs_Node_Net_Types::option_bool(options, "rejectUnauthorized") == Some(false);
+        Some(Purs_Node_Net_Types::TlsClientOptions {
+            server_name: Some(host.clone()),
+            accept_invalid_certs,
+        })
+    } else {
+        None
+    };
     let mut headers: Vec<(String, String)> = Vec::new();
     if let Some(header_options) = Purs_Node_Net_Types::option_field(options, "headers") {
         for (name, value) in header_options.__purust_foreign_object().entries() {
@@ -507,6 +547,7 @@ pub fn parse_request_options(options: &crate::UnknownType, url: Option<String>) 
         method,
         headers,
         queue: queue_value(),
+        tls,
     }
 }
 
@@ -588,6 +629,7 @@ pub fn client_request_new(plan: RequestPlan) -> Rc<ClientRequest> {
             local_port: None,
             no_delay: false,
             keep_alive: false,
+            tls: plan.tls.clone(),
         },
     );
     request

@@ -23,6 +23,7 @@ package:
     main: Test.Main
     dependencies:
       - aff
+      - assert
       - console
       - effect
       - either
