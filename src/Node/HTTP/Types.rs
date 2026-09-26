@@ -392,8 +392,8 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
 pub fn outgoing_set_header(stream: &Rc<OutgoingMessage>, name: String, value: crate::UnknownType) {
     let state = outgoing_state(stream);
     let mut state = state.lock().unwrap();
-    let value = match value.resolve() {
-        crate::Value::Array(values) => values
+    let value = match value.boxed_array_view() {
+        Some(values) => values
             .iter()
             .map(|value| value.unwrap_string())
             .collect::<Vec<_>>()

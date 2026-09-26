@@ -20,9 +20,9 @@ fn buffer_bytes(value: &crate::UnknownType) -> Option<Vec<u8>> {
 
 fn option_bytes(options: &crate::UnknownType, key: &str) -> Option<Vec<u8>> {
     let value = Purs_Node_Net_Types::option_field(options, key)?;
-    match value.resolve() {
-        crate::Value::Array(items) => items.iter().find_map(buffer_bytes),
-        _ => buffer_bytes(&value),
+    match value.boxed_array_view() {
+        Some(items) => items.iter().find_map(buffer_bytes),
+        None => buffer_bytes(&value),
     }
 }
 

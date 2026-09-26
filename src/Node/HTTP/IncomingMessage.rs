@@ -39,9 +39,9 @@ pub fn Node_HTTP_IncomingMessage_unsafeCookies(
         state
             .headers
             .get("set-cookie")
-            .map(|value| match value.resolve() {
-                crate::Value::Array(entries) => entries.to_vec(),
-                _ => vec![value.clone()],
+            .map(|value| match value.boxed_array_view() {
+                Some(entries) => entries.as_ref().clone(),
+                None => vec![value.clone()],
             })
     };
     match values {
@@ -61,9 +61,9 @@ pub fn Node_HTTP_IncomingMessage_headersDistinct(
             .entries()
             .into_iter()
             .map(|(name, value)| {
-                let values = match value.resolve() {
-                    crate::Value::Array(entries) => entries.to_vec(),
-                    _ => vec![value.clone()],
+                let values = match value.boxed_array_view() {
+                    Some(entries) => entries.as_ref().clone(),
+                    None => vec![value.clone()],
                 };
                 (name, crate::mk_array(values))
             })
